@@ -1,7 +1,6 @@
-import express from 'express';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 
-export const listMessages = async (req: express.Request, res: express.Response) => {
+export const listMessages = async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdmin();
     const { data, error } = await supabaseAdmin
@@ -12,13 +11,13 @@ export const listMessages = async (req: express.Request, res: express.Response) 
 
     if (error) throw error;
     res.json(data ? data.reverse() : []);
-  } catch (error: any) {
+  } catch (error) {
     console.error('List messages error:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
-export const sendMessage = async (req: express.Request, res: express.Response) => {
+export const sendMessage = async (req, res) => {
   try {
     const { user_name, content } = req.body;
     if (!user_name || !content) {
@@ -34,7 +33,7 @@ export const sendMessage = async (req: express.Request, res: express.Response) =
 
     if (error) throw error;
     res.status(201).json(data);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ error: error.message });
   }

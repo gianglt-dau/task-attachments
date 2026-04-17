@@ -1,7 +1,7 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 
-let _supabase: SupabaseClient | null = null;
-let _supabaseAdmin: SupabaseClient | null = null;
+let _supabase = null;
+let _supabaseAdmin = null;
 
 export function getSupabase() {
   if (!_supabase) {

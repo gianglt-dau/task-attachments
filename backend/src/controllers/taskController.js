@@ -1,8 +1,6 @@
-import express from 'express';
 import { getSupabaseAdmin, STORAGE_BUCKET } from '../lib/supabase.js';
-import { TaskStatus } from '../types.js';
 
-export const listTasks = async (req: express.Request, res: express.Response) => {
+export const listTasks = async (req, res) => {
   try {
     const supabaseAdmin = getSupabaseAdmin();
     const { data, error } = await supabaseAdmin
@@ -12,23 +10,23 @@ export const listTasks = async (req: express.Request, res: express.Response) => 
 
     if (error) throw error;
     res.json(data);
-  } catch (error: any) {
+  } catch (error) {
     console.error('List tasks error:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
-export const createTask = async (req: express.Request, res: express.Response) => {
+export const createTask = async (req, res) => {
   try {
     const { title, description } = req.body;
-    const file = (req as any).file;
+    const file = req.file;
 
     if (!title) {
       return res.status(400).json({ error: 'Title is required' });
     }
 
     const supabaseAdmin = getSupabaseAdmin();
-    
+
     // 1. Insert task
     const { data: task, error: insertError } = await supabaseAdmin
       .from('tasks')
@@ -53,29 +51,29 @@ export const createTask = async (req: express.Request, res: express.Response) =>
 
       if (!uploadError) {
         const { data: { publicUrl } } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
-        
+
         const { data: updatedTask } = await supabaseAdmin
           .from('tasks')
           .update({ attachment_url: publicUrl, attachment_name: originalName })
           .eq('id', task.id)
           .select()
           .single();
-        
+
         return res.status(201).json(updatedTask);
       }
     }
 
     res.status(201).json(task);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Create task error:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
-export const deleteAttachment = async (req: express.Request, res: express.Response) => {
+export const deleteAttachment = async (req, res) => {
   const { id } = req.params;
   console.log(`Attempting to delete attachment for task: ${id}`);
-  
+
   try {
     const supabaseAdmin = getSupabaseAdmin();
 
@@ -85,12 +83,12 @@ export const deleteAttachment = async (req: express.Request, res: express.Respon
       .select('*')
       .eq('id', id)
       .single();
-    
+
     if (fetchError) {
       console.error('Fetch task error:', fetchError);
       throw fetchError;
     }
-    
+
     if (!task.attachment_url) {
       console.warn(`Task ${id} has no attachment to delete`);
       return res.status(400).json({ error: 'No attachment to delete' });
@@ -99,12 +97,12 @@ export const deleteAttachment = async (req: express.Request, res: express.Respon
     // 2. Parse storage path from URL
     const bucketInUrl = `/${STORAGE_BUCKET}/`;
     const bucketIndex = task.attachment_url.indexOf(bucketInUrl);
-    
+
     if (bucketIndex === -1) {
       console.error('Invalid attachment URL format:', task.attachment_url);
       throw new Error('Could not determine storage path from URL');
     }
-    
+
     const storagePath = task.attachment_url.substring(bucketIndex + bucketInUrl.length);
     console.log(`Deleting storage file: ${storagePath}`);
 
@@ -112,7 +110,7 @@ export const deleteAttachment = async (req: express.Request, res: express.Respon
     const { error: storageError } = await supabaseAdmin.storage
       .from(STORAGE_BUCKET)
       .remove([storagePath]);
-    
+
     if (storageError) {
       console.warn('Storage deletion warning (continuing to DB update):', storageError);
     } else {
@@ -126,7 +124,7 @@ export const deleteAttachment = async (req: express.Request, res: express.Respon
       .eq('id', id)
       .select()
       .single();
-    
+
     if (dbError) {
       console.error('DB update error:', dbError);
       throw dbError;
@@ -134,18 +132,18 @@ export const deleteAttachment = async (req: express.Request, res: express.Respon
 
     console.log(`Successfully updated task ${id} in DB`);
     res.json(updatedTask);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Delete attachment error details:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
-export const updateTaskStatus = async (req: express.Request, res: express.Response) => {
+export const updateTaskStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
 
-    const validStatuses: TaskStatus[] = ['open', 'in_progress', 'done'];
+    const validStatuses = ['open', 'in_progress', 'done'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
@@ -160,16 +158,16 @@ export const updateTaskStatus = async (req: express.Request, res: express.Respon
 
     if (error) throw error;
     res.json(data);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Update status error:', error);
     res.status(500).json({ error: error.message });
   }
 };
 
-export const uploadAttachment = async (req: express.Request, res: express.Response) => {
+export const uploadAttachment = async (req, res) => {
   try {
     const { id } = req.params;
-    const file = (req as any).file;
+    const file = req.file;
 
     if (!file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -189,12 +187,11 @@ export const uploadAttachment = async (req: express.Request, res: express.Respon
     }
 
     // 1. Upload to Supabase Storage
-    // Use originalName for the database display but a safe path for storage
-    const storagePath = `${id}/${Date.now()}-${file.originalname}`; 
-    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+    const storagePath = `${id}/${Date.now()}-${file.originalname}`;
+    const { error: uploadError } = await supabaseAdmin.storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, file.buffer, {
-        contentType: contentType,
+        contentType,
         upsert: true
       });
 
@@ -210,7 +207,7 @@ export const uploadAttachment = async (req: express.Request, res: express.Respon
       .from('tasks')
       .update({
         attachment_url: publicUrl,
-        attachment_name: originalName, // Use fixed UTF-8 name here
+        attachment_name: originalName,
         updated_at: new Date().toISOString()
       })
       .eq('id', id)
@@ -220,7 +217,7 @@ export const uploadAttachment = async (req: express.Request, res: express.Respon
     if (dbError) throw dbError;
 
     res.json(taskData);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Upload attachment error:', error);
     res.status(500).json({ error: error.message });
   }

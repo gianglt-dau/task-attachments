@@ -12,7 +12,8 @@
     "allowJs": true,
     "jsx": "react-jsx",
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": ["vite/client", "vitest/globals"]
   },
   "include": ["src/**/*", "vite.config.ts"]
 }
