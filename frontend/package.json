@@ -37,6 +37,7 @@
     "vitest": "^3.0.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/user-event": "^14.0.0",
     "jsdom": "^26.0.0"
   }
 }
