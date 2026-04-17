@@ -1,0 +1,64 @@
+import { useEffect, useState } from 'react';
+import { getSupabase } from '../lib/supabase.ts';
+import { Task } from '../types.ts';
+
+export function useRealtimeTasks() {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchTasks = async () => {
+    try {
+      const response = await fetch('/api/tasks');
+      if (!response.ok) throw new Error('Failed to fetch tasks');
+      const data = await response.json();
+      setTasks(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTasks();
+
+    const handleLocalChange = () => {
+      console.log('Local change detected, refetching...');
+      fetchTasks();
+    };
+
+    window.addEventListener('tasks-changed', handleLocalChange);
+
+    let channel: any;
+
+    try {
+      const supabase = getSupabase();
+      // Subscribe to changes in 'tasks' table
+      channel = supabase
+        .channel('tasks-all')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'tasks' },
+          (payload) => {
+            console.log('Change received!', payload);
+            fetchTasks();
+          }
+        )
+        .subscribe();
+    } catch (err) {
+      console.warn('Supabase not configured for realtime:', err);
+    }
+
+    return () => {
+      window.removeEventListener('tasks-changed', handleLocalChange);
+      if (channel) {
+        try {
+          getSupabase().removeChannel(channel);
+        } catch (e) {}
+      }
+    };
+  }, []);
+
+  return { tasks, loading, error, refetch: fetchTasks };
+}
