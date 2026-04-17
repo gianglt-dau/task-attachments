@@ -52,8 +52,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({ task }) => {
   };
 
   const handleDeleteAttachment = async () => {
-    if (!confirm('Bạn có chắc chắn muốn xoá file đính kèm này?')) return;
-    
+    // Note: window.confirm might not work in all iframe environments
     setIsDeleting(true);
     try {
       const response = await fetch(`/api/tasks/${task.id}/attachment`, {

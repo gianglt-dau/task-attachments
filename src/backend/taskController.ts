@@ -73,8 +73,10 @@ export const createTask = async (req: express.Request, res: express.Response) =>
 };
 
 export const deleteAttachment = async (req: express.Request, res: express.Response) => {
+  const { id } = req.params;
+  console.log(`Attempting to delete attachment for task: ${id}`);
+  
   try {
-    const { id } = req.params;
     const supabaseAdmin = getSupabaseAdmin();
 
     // 1. Get task data
@@ -84,20 +86,38 @@ export const deleteAttachment = async (req: express.Request, res: express.Respon
       .eq('id', id)
       .single();
     
-    if (fetchError) throw fetchError;
-    if (!task.attachment_url) return res.status(400).json({ error: 'No attachment to delete' });
+    if (fetchError) {
+      console.error('Fetch task error:', fetchError);
+      throw fetchError;
+    }
+    
+    if (!task.attachment_url) {
+      console.warn(`Task ${id} has no attachment to delete`);
+      return res.status(400).json({ error: 'No attachment to delete' });
+    }
 
     // 2. Parse storage path from URL
-    // Public URL format: .../storage/v1/object/public/bucket-name/folder/filename
-    const baseUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/`;
-    const storagePath = task.attachment_url.replace(baseUrl, '');
+    const bucketInUrl = `/${STORAGE_BUCKET}/`;
+    const bucketIndex = task.attachment_url.indexOf(bucketInUrl);
+    
+    if (bucketIndex === -1) {
+      console.error('Invalid attachment URL format:', task.attachment_url);
+      throw new Error('Could not determine storage path from URL');
+    }
+    
+    const storagePath = task.attachment_url.substring(bucketIndex + bucketInUrl.length);
+    console.log(`Deleting storage file: ${storagePath}`);
 
     // 3. Delete from storage
     const { error: storageError } = await supabaseAdmin.storage
       .from(STORAGE_BUCKET)
       .remove([storagePath]);
     
-    if (storageError) throw storageError;
+    if (storageError) {
+      console.warn('Storage deletion warning (continuing to DB update):', storageError);
+    } else {
+      console.log('Successfully deleted file from storage');
+    }
 
     // 4. Update DB
     const { data: updatedTask, error: dbError } = await supabaseAdmin
@@ -107,11 +127,15 @@ export const deleteAttachment = async (req: express.Request, res: express.Respon
       .select()
       .single();
     
-    if (dbError) throw dbError;
+    if (dbError) {
+      console.error('DB update error:', dbError);
+      throw dbError;
+    }
 
+    console.log(`Successfully updated task ${id} in DB`);
     res.json(updatedTask);
   } catch (error: any) {
-    console.error('Delete attachment error:', error);
+    console.error('Delete attachment error details:', error);
     res.status(500).json({ error: error.message });
   }
 };
