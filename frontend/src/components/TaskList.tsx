@@ -1,7 +1,7 @@
 import React from 'react';
 import { useRealtimeTasks } from '../hooks/useRealtimeTasks.ts';
 import { TaskItem } from './TaskItem.tsx';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import { ListTodo, Loader2, AlertCircle } from 'lucide-react';
 
 export const TaskList: React.FC = () => {

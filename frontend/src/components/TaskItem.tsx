@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Task, TaskStatus } from '../types.ts';
 import { CheckCircle2, Circle, Clock, Paperclip, ExternalLink, Loader2, Upload, Trash2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { apiFetch } from '../lib/api.ts';
 
 interface TaskItemProps {
@@ -62,7 +62,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({ task }) => {
       if (response.ok) {
         window.dispatchEvent(new CustomEvent('tasks-changed'));
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error deleting attachment:', error);
     } finally {
       setIsDeleting(false);

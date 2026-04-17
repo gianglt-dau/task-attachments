@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { getSupabase } from '../lib/supabase.ts';
 import { apiFetch } from '../lib/api.ts';
 import { Task } from '../types.ts';
@@ -14,8 +15,8 @@ export function useRealtimeTasks() {
       if (!response.ok) throw new Error('Failed to fetch tasks');
       const data = await response.json();
       setTasks(data);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
@@ -31,7 +32,7 @@ export function useRealtimeTasks() {
 
     window.addEventListener('tasks-changed', handleLocalChange);
 
-    let channel: any;
+    let channel: RealtimeChannel | undefined;
 
     try {
       const supabase = getSupabase();
@@ -56,7 +57,7 @@ export function useRealtimeTasks() {
       if (channel) {
         try {
           getSupabase().removeChannel(channel);
-        } catch (e) {}
+        } catch (_e) { /* ignore cleanup errors */ }
       }
     };
   }, []);

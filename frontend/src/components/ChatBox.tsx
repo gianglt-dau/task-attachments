@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { getSupabase } from '../lib/supabase.ts';
 import { apiFetch } from '../lib/api.ts';
 import { ChatMessage } from '../types.ts';
-import { Send, User, MessageSquare, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Send, MessageSquare, Loader2 } from 'lucide-react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export const ChatBox: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -32,7 +32,7 @@ export const ChatBox: React.FC = () => {
   useEffect(() => {
     fetchMessages();
 
-    let channel: any;
+    let channel: RealtimeChannel | undefined;
     try {
       const supabase = getSupabase();
       channel = supabase.channel('room:public', {
@@ -46,7 +46,7 @@ export const ChatBox: React.FC = () => {
       channel
         .on('postgres_changes', 
           { event: 'INSERT', schema: 'public', table: 'messages' }, 
-          (payload: any) => {
+          (payload: { new: ChatMessage }) => {
             const newMsg = payload.new as ChatMessage;
             setMessages(prev => [...prev, newMsg]);
           }
@@ -56,10 +56,10 @@ export const ChatBox: React.FC = () => {
           const users = Object.keys(newState).filter(u => u !== 'anonymous');
           setOnlineUsers(users);
         })
-        .on('presence', { event: 'join' }, ({ key, newPresences }: any) => {
+        .on('presence', { event: 'join' }, ({ key }: { key: string }) => {
           console.log('User joined:', key);
         })
-        .on('presence', { event: 'leave' }, ({ key, leftPresences }: any) => {
+        .on('presence', { event: 'leave' }, ({ key }: { key: string }) => {
           console.log('User left:', key);
         })
         .subscribe(async (status: string) => {
