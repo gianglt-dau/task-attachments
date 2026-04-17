@@ -58,7 +58,7 @@ Khai báo trên Vercel **backend project** và trong file `.env` local:
 | `SUPABASE_SERVICE_ROLE_KEY` |  | Secret key  toàn quyền DB | Supabase  Settings  API  service_role |
 | `STORAGE_BUCKET` |  | Tên bucket lưu file | Tự đặt: `task-attachments` |
 | `FRONTEND_URL` |  | URL frontend  dùng cho CORS | URL Vercel frontend sau khi deploy |
-| `GEMINI_API_KEY` | Nếu dùng AI | Gemini API key | Google AI Studio |
+
 
 ### 2.3 Required ENV  Frontend
 
