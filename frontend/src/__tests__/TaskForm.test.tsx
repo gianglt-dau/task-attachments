@@ -30,12 +30,12 @@ describe('TaskForm', () => {
 
   it('renders the submit button', () => {
     render(<TaskForm />);
-    expect(screen.getByRole('button', { name: /lưu task/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /lưu công việc/i })).toBeInTheDocument();
   });
 
   it('does not call apiFetch when submitted with empty title', async () => {
     render(<TaskForm />);
-    fireEvent.submit(screen.getByRole('button', { name: /lưu task/i }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: /lưu công việc/i }).closest('form')!);
     expect(mockApiFetch).not.toHaveBeenCalled();
   });
 
