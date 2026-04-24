@@ -393,7 +393,17 @@ Supabase mặc định bật RLS cho mọi bảng. Backend dùng `SERVICE_ROLE_K
 ```json
 { "error": "Bucket not found" }
 ```
-Upload file thành công (HTTP 201) nhưng `attachment_url` là null.
+Task được tạo (HTTP 201) nhưng `attachment_url` = null. Kể từ **2026-04-24**, response còn có thêm field:
+```json
+{
+  "id": "...",
+  "title": "...",
+  "attachment_url": null,
+  "upload_warning": "Task created but file upload failed: Bucket not found"
+}
+```
+
+> **Trước khi fix (trước 2026-04-24):** lỗi bị nuốt im lặng — response vẫn là `201`, không có `upload_warning`, không có log. Task được tạo trong DB nhưng người dùng không biết file không được upload.
 
 **Nguyên nhân:**  
 Backend dùng bucket name từ `STORAGE_BUCKET` env var (default: `task-attachments`). Bucket phải tồn tại trong Supabase trước khi upload.

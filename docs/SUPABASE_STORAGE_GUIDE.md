@@ -133,9 +133,13 @@ if (file) {
   // ⚠️ QUAN TRỌNG: Supabase SDK không throw — phải kiểm tra error thủ công
   // Nếu bỏ qua bước này: DB ghi attachment_url phantom, file không tồn tại thực
   if (uploadError) {
-    console.error('[Storage] Upload failed:', uploadError.message);
-    // Task đã tạo trong DB nhưng không có file → trả về task không có attachment
-    return res.status(201).json({ ...task, _uploadWarning: 'File upload failed, task saved without attachment' });
+    console.error('Upload attachment error (task still created):', uploadError);
+    // Task đã được insert thành công — chỉ upload file bị lỗi
+    // Trả 201 với upload_warning để frontend/log biết nguyên nhân, KHÔNG rollback task
+    return res.status(201).json({
+      ...task,
+      upload_warning: `Task created but file upload failed: ${uploadError.message}`
+    });
   }
 
   // Bước 5: Lấy publicUrl
@@ -544,7 +548,7 @@ LIMIT 20;
 | Triệu chứng | Nguyên nhân | Xử lý |
 |---|---|---|
 | `Bucket not found` | Bucket chưa tạo hoặc tên sai | Tạo bucket `task-attachments` trong Dashboard |
-| `attachment_url` = null sau upload | Upload Storage lỗi (bị bỏ qua trong code) | Kiểm tra Vercel Function Logs, kiểm tra `SERVICE_ROLE_KEY` |
+| `attachment_url` = null + `upload_warning` trong response | Upload Storage lỗi — task vẫn được tạo, file không được lưu | Đọc `upload_warning` để biết lý do; kiểm tra Vercel Function Logs và `SERVICE_ROLE_KEY` |
 | **`attachment_url` có nhưng file 404** | **SDK không throw — upload thất bại âm thầm, DB ghi phantom URL** | **Xem [Tình huống 1](#tình-huống-1-db-cập-nhật-nhưng-storage-upload-thất-bại-đã-gặp-2026-04-23)** |
 | Download URL trả về `403 Forbidden` | Bucket không phải public | Vào Dashboard → Storage → Edit bucket → bật Public |
 | Tên file hiển thị bị lỗi ký tự | Encoding chưa fix đúng | Kiểm tra `Buffer.from(..., 'latin1').toString('utf8')` |
@@ -584,15 +588,25 @@ Xem thêm: [TROUBLESHOOTING_DEPLOY.md](./TROUBLESHOOTING_DEPLOY.md) — phần *
 ```js
 // ❌ SAI — storage.upload() trả { data, error }, KHÔNG throw
 await supabaseAdmin.storage.from(bucket).upload(path, buffer, opts);
-// Nếu upload lỗi, code vẫn chạy tiếp → DB ghi attachment_url phantom
+// Nếu upload lỗi, code vẫn chạy tiếp → DB ghi attachment_url phantom (lỗi im lặng)
 
-// ✅ ĐÚNG — luôn destructure và kiểm tra error
+// ✅ ĐÚNG (endpoint createTask) — kiểm tra error, task vẫn được giữ, trả upload_warning
 const { error: uploadError } = await supabaseAdmin.storage
   .from(bucket).upload(path, buffer, opts);
-if (uploadError) throw new Error(uploadError.message);
+if (uploadError) {
+  console.error('Upload attachment error (task still created):', uploadError);
+  return res.status(201).json({
+    ...task,
+    upload_warning: `Task created but file upload failed: ${uploadError.message}`
+  });
+}
+
+// ✅ ĐÚNG (endpoint uploadAttachment) — task đã tồn tại, upload fail = lỗi thật
+if (uploadError) throw uploadError; // → HTTP 500 có message rõ ràng
 ```
 
-> **Đây là nguyên nhân của tình huống: "DB có attachment_url nhưng truy cập file trả về 404/403".**
+> **Đây là nguyên nhân của tình huống: "DB có attachment_url nhưng truy cập file trả về 404/403".**  
+> Kể từ **2026-04-24**, `createTask` đã được fix: upload fail sẽ trả `upload_warning` thay vì im lặng.
 
 ---
 
@@ -607,7 +621,7 @@ if (uploadError) throw new Error(uploadError.message);
 
 | Nguyên nhân | Dấu hiệu |
 |---|---|
-| Code không kiểm tra `uploadError` từ SDK | Vercel logs không có lỗi rõ ràng, task vẫn được tạo |
+| ~~Code không kiểm tra `uploadError` từ SDK~~ | ~~Vercel logs không có lỗi, task vẫn được tạo~~ ✅ **Đã fix 2026-04-24** — giờ trả `upload_warning` |
 | `SERVICE_ROLE_KEY` không có quyền storage | `StorageApiError: new row violates row-level security` |
 | `STORAGE_BUCKET` env var sai tên | `StorageApiError: Bucket not found` |
 | Vercel function timeout (10s Hobby) | Log hiện `FUNCTION_INVOCATION_TIMEOUT` |
