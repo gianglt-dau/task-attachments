@@ -1,7 +1,7 @@
 # Hướng dẫn Supabase File Storage
 
 > Project: **task-attachments** | Stack: Express (Node ESM) + React/Vite + Supabase  
-> Cập nhật: 2026-04-21
+> Cập nhật: 2026-04-24
 
 ---
 
@@ -21,6 +21,7 @@
 - [Giới hạn kích thước file](#giới-hạn-kích-thước-file)
 - [Cấu hình môi trường](#cấu-hình-môi-trường)
 - [Kiểm thử Storage](#kiểm-thử-storage)
+- [Xử lý lỗi và tính nhất quán DB–Storage](#xử-lý-lỗi-và-tính-nhất-quán-dbstorage)
 - [Troubleshooting thường gặp](#troubleshooting-thường-gặp)
 
 ---
@@ -123,11 +124,19 @@ if (file) {
     if (!contentType.includes('charset')) contentType += '; charset=utf-8';
   }
 
-  // Bước 4: Upload lên Storage
+  // Bước 4: Upload lên Storage — phải kiểm tra error!
   const storagePath = `${task.id}/${Date.now()}-${file.originalname}`;
-  await supabaseAdmin.storage
+  const { error: uploadError } = await supabaseAdmin.storage
     .from(STORAGE_BUCKET)
     .upload(storagePath, file.buffer, { contentType, upsert: true });
+
+  // ⚠️ QUAN TRỌNG: Supabase SDK không throw — phải kiểm tra error thủ công
+  // Nếu bỏ qua bước này: DB ghi attachment_url phantom, file không tồn tại thực
+  if (uploadError) {
+    console.error('[Storage] Upload failed:', uploadError.message);
+    // Task đã tạo trong DB nhưng không có file → trả về task không có attachment
+    return res.status(201).json({ ...task, _uploadWarning: 'File upload failed, task saved without attachment' });
+  }
 
   // Bước 5: Lấy publicUrl
   const { data: { publicUrl } } = supabaseAdmin.storage
@@ -172,11 +181,20 @@ if (contentType.startsWith('text/') || contentType === 'application/json') {
 
 // Bước 4: Upload với upsert=true (ghi đè nếu path đã tồn tại)
 const storagePath = `${id}/${Date.now()}-${file.originalname}`;
-await supabaseAdmin.storage
+const { error: uploadError } = await supabaseAdmin.storage
   .from(STORAGE_BUCKET)
   .upload(storagePath, file.buffer, { contentType, upsert: true });
 
-// Bước 5: Lấy publicUrl và update DB
+// ⚠️ QUAN TRỌNG: Phải kiểm tra error — SDK không throw!
+if (uploadError) {
+  console.error('[Storage] Upload failed:', uploadError.message);
+  return res.status(500).json({
+    error: 'File upload to storage failed',
+    detail: uploadError.message
+  });
+}
+
+// Bước 5: Lấy publicUrl và update DB (chỉ khi upload thành công)
 const { data: { publicUrl } } = supabaseAdmin.storage
   .from(STORAGE_BUCKET).getPublicUrl(storagePath);
 
@@ -527,10 +545,14 @@ LIMIT 20;
 |---|---|---|
 | `Bucket not found` | Bucket chưa tạo hoặc tên sai | Tạo bucket `task-attachments` trong Dashboard |
 | `attachment_url` = null sau upload | Upload Storage lỗi (bị bỏ qua trong code) | Kiểm tra Vercel Function Logs, kiểm tra `SERVICE_ROLE_KEY` |
+| **`attachment_url` có nhưng file 404** | **SDK không throw — upload thất bại âm thầm, DB ghi phantom URL** | **Xem [Tình huống 1](#tình-huống-1-db-cập-nhật-nhưng-storage-upload-thất-bại-đã-gặp-2026-04-23)** |
 | Download URL trả về `403 Forbidden` | Bucket không phải public | Vào Dashboard → Storage → Edit bucket → bật Public |
 | Tên file hiển thị bị lỗi ký tự | Encoding chưa fix đúng | Kiểm tra `Buffer.from(..., 'latin1').toString('utf8')` |
 | `Không thể xác định đường dẫn lưu trữ` | `STORAGE_BUCKET` env var sai | Đối chiếu env var với tên bucket thực tế |
 | Upload lỗi `413 Payload Too Large` | File > 4.5MB (Vercel limit) | Thêm validation kích thước ở frontend |
+| `504 Gateway Timeout` khi upload | File lớn + Vercel function timeout 10s | Giảm max file size, hoặc upgrade Vercel Pro |
+| `new row violates row-level security` | Dùng `ANON_KEY` thay vì `SERVICE_ROLE_KEY` | Sửa env var đúng `SERVICE_ROLE_KEY` |
+| File có trong Storage nhưng DB = null | DB update thất bại sau khi upload xong | Xem [Tình huống 2](#tình-huống-2-storage-upload-thành-công-nhưng-db-không-được-cập-nhật) |
 | File cũ không bị xóa khi upload mới | Thiết kế hiện tại — chỉ ghi đè DB | Cần xóa file cũ thủ công trong Storage Dashboard hoặc thêm logic xóa |
 | Storage đầy (Supabase Free: 1GB) | Nhiều file không còn tham chiếu | Dọn dẹp orphaned files (file không có task tương ứng) |
 
@@ -548,3 +570,185 @@ AND NOT EXISTS (
 ```
 
 Xem thêm: [TROUBLESHOOTING_DEPLOY.md](./TROUBLESHOOTING_DEPLOY.md) — phần **SUPABASE Configuration Issues**.
+
+---
+
+*Cập nhật 2026-04-24: Bổ sung section [Xử lý lỗi và tính nhất quán DB–Storage](#xử-lý-lỗi-và-tính-nhất-quán-dbstorage), fix code example kiểm tra `uploadError`, thêm 4 tình huống thực tế và checklist chẩn đoán.*
+
+---
+
+## Xử lý lỗi và tính nhất quán DB–Storage
+
+### Vấn đề cốt lõi: Supabase SDK không throw exception
+
+```js
+// ❌ SAI — storage.upload() trả { data, error }, KHÔNG throw
+await supabaseAdmin.storage.from(bucket).upload(path, buffer, opts);
+// Nếu upload lỗi, code vẫn chạy tiếp → DB ghi attachment_url phantom
+
+// ✅ ĐÚNG — luôn destructure và kiểm tra error
+const { error: uploadError } = await supabaseAdmin.storage
+  .from(bucket).upload(path, buffer, opts);
+if (uploadError) throw new Error(uploadError.message);
+```
+
+> **Đây là nguyên nhân của tình huống: "DB có attachment_url nhưng truy cập file trả về 404/403".**
+
+---
+
+### Tình huống 1: DB cập nhật nhưng Storage upload thất bại *(đã gặp 2026-04-23)*
+
+**Triệu chứng:**
+- Task tạo thành công, response có `attachment_url`
+- Truy cập URL → 404 Not Found hoặc file không load được
+- Trong Supabase Dashboard → Storage: **file không tồn tại**
+
+**Nguyên nhân có thể:**
+
+| Nguyên nhân | Dấu hiệu |
+|---|---|
+| Code không kiểm tra `uploadError` từ SDK | Vercel logs không có lỗi rõ ràng, task vẫn được tạo |
+| `SERVICE_ROLE_KEY` không có quyền storage | `StorageApiError: new row violates row-level security` |
+| `STORAGE_BUCKET` env var sai tên | `StorageApiError: Bucket not found` |
+| Vercel function timeout (10s Hobby) | Log hiện `FUNCTION_INVOCATION_TIMEOUT` |
+| File > 4.5MB bị Vercel reject | Response 413 trước khi vào Express |
+| Bucket chưa được tạo ở môi trường production | Bucket tồn tại local/staging nhưng không có ở Prod |
+
+**Cách chẩn đoán:**
+
+```bash
+# Bước 1: Kiểm tra Vercel Function Logs
+# Vercel Dashboard → Project → Functions → xem log gần thời điểm upload
+# Tìm dòng "[Storage] Upload failed:" hoặc error từ Supabase
+
+# Bước 2: Kiểm tra file thực sự tồn tại trong Storage
+# Supabase Dashboard → Storage → task-attachments → tìm folder theo task_id
+```
+
+```sql
+-- Bước 3: Tìm task có attachment_url nhưng file không tồn tại trong Storage
+-- (So sánh tasks DB với storage.objects)
+SELECT
+  t.id AS task_id,
+  t.title,
+  t.attachment_url,
+  t.attachment_name,
+  o.name AS storage_file
+FROM tasks t
+LEFT JOIN storage.objects o
+  ON o.bucket_id = 'task-attachments'
+  AND t.attachment_url LIKE '%' || o.name
+WHERE t.attachment_url IS NOT NULL
+  AND o.name IS NULL;
+-- Rows returned = tasks bị "ghost URL" (DB có nhưng Storage không có)
+```
+
+**Cách xử lý:**
+
+```sql
+-- Xử lý: Null hóa attachment cho các task bị ghost URL
+-- ⚠️ Chạy SELECT trước để xác nhận trước khi UPDATE
+UPDATE tasks
+SET attachment_url = NULL,
+    attachment_name = NULL,
+    updated_at = NOW()
+WHERE attachment_url IS NOT NULL
+  AND id NOT IN (
+    SELECT DISTINCT
+      -- Extract task_id từ storage path (phần đầu trước dấu /)
+      (regexp_match(o.name, '^([^/]+)/'))[1]::uuid
+    FROM storage.objects o
+    WHERE o.bucket_id = 'task-attachments'
+  );
+```
+
+Sau khi reset, user upload lại file qua `POST /api/tasks/:id/attachment`.
+
+---
+
+### Tình huống 2: Storage upload thành công nhưng DB không được cập nhật
+
+**Triệu chứng:**
+- File xuất hiện trong Supabase Storage dashboard
+- Task trong DB: `attachment_url = null`, `attachment_name = null`
+
+**Nguyên nhân:** Upload thành công nhưng `supabaseAdmin.from('tasks').update(...)` lỗi (DB connection, RLS, sai `id`).
+
+**Cách xử lý:**
+
+```sql
+-- Tìm file mồ côi trong Storage (có file nhưng task không tham chiếu)
+SELECT
+  o.name AS storage_path,
+  o.created_at,
+  (regexp_match(o.name, '^([^/]+)/'))[1] AS task_id_from_path
+FROM storage.objects o
+WHERE o.bucket_id = 'task-attachments'
+AND NOT EXISTS (
+  SELECT 1 FROM tasks t
+  WHERE t.attachment_url LIKE '%' || o.name
+);
+```
+
+Sau đó cập nhật thủ công hoặc trigger upload lại từ frontend.
+
+---
+
+### Tình huống 3: Upload thất bại do Vercel timeout
+
+**Triệu chứng:**
+- File lớn (~3–4MB), upload chậm
+- Response là `504 Gateway Timeout` hoặc `FUNCTION_INVOCATION_TIMEOUT`
+- Task được tạo trong DB nhưng không có attachment
+
+**Giới hạn Vercel Hobby:** Function timeout = **10 giây**
+
+**Kiểm tra:**
+```bash
+# Vercel Dashboard → Project → Functions → xem duration
+# Nếu function chạy ~9-10s và timeout → đây là nguyên nhân
+```
+
+**Giải pháp:**
+- Giảm giới hạn file xuống 2–3MB thay vì 4MB
+- Upgrade Vercel lên Pro (timeout 60s)
+- Hoặc cho frontend upload trực tiếp lên Supabase Storage (bypass backend)
+
+---
+
+### Tình huống 4: Upload lỗi do RLS / thiếu quyền Storage
+
+**Triệu chứng:**
+```
+StorageApiError: new row violates row-level security policy for table "objects"
+```
+
+**Nguyên nhân:** Backend không dùng `SERVICE_ROLE_KEY` mà dùng `ANON_KEY`.
+
+**Kiểm tra:**
+```bash
+# Xác nhận env var đúng key
+# SUPABASE_SERVICE_ROLE_KEY phải là key dài, bắt đầu bằng eyJ...
+# KHÔNG phải anon key (anon key cũng bắt đầu eyJ nhưng payload khác)
+```
+
+```sql
+-- Kiểm tra trong Supabase SQL Editor — service_role có quyền bypass RLS
+SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname = 'service_role';
+-- → rolbypassrls = true ✅
+```
+
+---
+
+### Checklist khi gặp lỗi Storage
+
+```
+[ ] Vercel Function Logs có dòng error nào liên quan Storage không?
+[ ] SUPABASE_SERVICE_ROLE_KEY đúng và đủ quyền?
+[ ] STORAGE_BUCKET env var khớp tên bucket trong Supabase?
+[ ] Bucket đã được tạo ở đúng môi trường (staging vs production)?
+[ ] Bucket có bật Public không?
+[ ] File size < 4MB?
+[ ] Function không bị timeout?
+[ ] Code có kiểm tra { error } từ storage.upload() không?
+```

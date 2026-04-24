@@ -49,18 +49,32 @@ export const createTask = async (req, res) => {
         .from(STORAGE_BUCKET)
         .upload(storagePath, file.buffer, { contentType, upsert: true });
 
-      if (!uploadError) {
-        const { data: { publicUrl } } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
-
-        const { data: updatedTask } = await supabaseAdmin
-          .from('tasks')
-          .update({ attachment_url: publicUrl, attachment_name: originalName })
-          .eq('id', task.id)
-          .select()
-          .single();
-
-        return res.status(201).json(updatedTask);
+      if (uploadError) {
+        console.error('Upload attachment error (task still created):', uploadError);
+        return res.status(201).json({
+          ...task,
+          upload_warning: `Task created but file upload failed: ${uploadError.message}`
+        });
       }
+
+      const { data: { publicUrl } } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
+
+      const { data: updatedTask, error: updateError } = await supabaseAdmin
+        .from('tasks')
+        .update({ attachment_url: publicUrl, attachment_name: originalName })
+        .eq('id', task.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('DB update after upload error (task and file still saved):', updateError);
+        return res.status(201).json({
+          ...task,
+          upload_warning: `File uploaded but failed to save URL to task: ${updateError.message}`
+        });
+      }
+
+      return res.status(201).json(updatedTask);
     }
 
     res.status(201).json(task);

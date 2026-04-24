@@ -91,7 +91,8 @@ Khai báo trên Vercel **frontend project** và trong file `.env` local:
 |---------|----------|-------------|
 | Supabase PostgreSQL | Lưu task data | Tạo bảng `tasks` (xem SQL ở phần 6) |
 | Supabase Storage | Lưu file đính kèm | Tạo bucket `task-attachments` |
-| Supabase Realtime | Push thay đổi DB  browser | Bật Replication cho bảng `tasks` |
+| Supabase Realtime — Postgres Changes | Push thay đổi DB → browser (task list) | Bật Replication cho bảng `tasks` |
+| Supabase Realtime — Broadcast | Truyền tin nhắn chat real-time giữa các browser | Bật Realtime service (không cần bảng DB) |
 
 ### 2.6 Deploy Dependencies (thứ tự bắt buộc)
 
@@ -100,7 +101,38 @@ Khai báo trên Vercel **frontend project** và trong file `.env` local:
 ```
 
 Không thể đảo thứ tự vì mỗi bước cần output của bước trước.
+### 2.7 Chat Service Contract
 
+> Chat **không đi qua backend Express**. DevOps cần hiểu rõ điều này để tránh debug nhầm layer.
+
+**Luồng chat:**
+```
+[Browser A — ChatBox]
+       │
+       │  WebSocket (wss://)
+       ▼
+[Supabase Realtime Server — channel: "chat:public"]
+       │
+       │  Broadcast
+       ▼
+[Browser B — ChatBox]
+
+❌ Backend Express KHÔNG xử lý tin nhắn chat
+❌ Bảng DB KHÔNG được ghi khi chat
+```
+
+**Yêu cầu hoạt động:**
+
+| Yêu cầu | Chi tiết | Ai cấu hình |
+|---------|----------|------------|
+| Supabase Realtime **bật** | Service phải được enable trên project | DevOps — Supabase Dashboard |
+| `VITE_SUPABASE_URL` | Frontend dùng để khởi tạo Supabase client | DevOps — Vercel frontend ENV |
+| `VITE_SUPABASE_ANON_KEY` | Xác thực kết nối Broadcast (anon key là đủ) | DevOps — Vercel frontend ENV |
+| Không cần backend ENV | Chat hoàn toàn phía client | — |
+| Không cần bảng DB | Broadcast không persist vào Postgres | — |
+
+> **Hệ quả quan trọng:** Nếu chat lỗi sau khi deploy, không cần kiểm tra backend hay DB.  
+> Chỉ cần kiểm tra: Supabase Realtime bật chưa? + 2 biến `VITE_*` frontend có đúng không?
 ---
 
 ## 3. Chuẩn bị  Đăng ký tài khoản
@@ -212,11 +244,38 @@ Kiểm tra: **Table Editor**  phải thấy bảng `tasks`.
 - **Name:** `task-attachments` *(phân biệt hoa/thường  phải khớp `STORAGE_BUCKET` trong `.env`)*
 - Tick **Public bucket**  **Save**
 
-### 5.3 Bật Realtime
+### 5.3 Bật Realtime cho tính năng Task (Postgres Changes)
 
-**Database  Replication**  bật toggle bảng `tasks` (INSERT + UPDATE).
+**Database → Replication** → bật toggle bảng `tasks` (INSERT + UPDATE).
 
-> Nếu không bật: app vẫn chạy, chỉ mất tính năng tự cập nhật giữa các tab.
+> Nếu không bật: app vẫn chạy, chỉ mất tính năng tự cập nhật danh sách task giữa các tab.
+
+### 5.4 Kiểm tra Realtime cho Chat (Broadcast)
+
+Chat dùng **Broadcast mode** — hoạt động độc lập với Postgres, không cần bật replication bảng nào.  
+Chỉ cần xác nhận Realtime service được bật trên project:
+
+1. Supabase Dashboard → **Project Settings** → **API**
+2. Mục **Realtime** → đảm bảo toggle **Enabled**
+
+> Nếu mục Realtime không hiện hoặc toggle đang tắt: bật lên rồi chờ 1–2 phút để service khởi động lại.
+
+**Kiểm tra kết nối Broadcast sau khi deploy:**
+
+1. Mở Supabase Dashboard → **Realtime** → **Inspector**
+2. Mở URL frontend trên 2 tab trình duyệt khác nhau
+3. Ở tab 1 gửi 1 tin nhắn chat
+4. Inspector phải hiện channel `chat:public` đang có ≥ 2 subscribers
+5. Tab 2 phải nhận được tin nhắn ngay (không cần F5)
+
+**Các nguyên nhân chat không hoạt động sau deploy:**
+
+| Triệu chứng | Nguyên nhân | Kiểm tra |
+|------------|------------|---------|
+| ChatBox không hiển thị | `VITE_SUPABASE_URL` hoặc `VITE_SUPABASE_ANON_KEY` sai/thiếu | Vercel frontend ENV vars |
+| Gửi tin nhưng tab kia không nhận | Supabase Realtime chưa bật | Supabase → Project Settings → API → Realtime |
+| Console lỗi `WebSocket connection failed` | Sai URL Supabase hoặc firewall block WSS | Kiểm tra `VITE_SUPABASE_URL` |
+| Lỗi `JWT expired` hoặc `Invalid API key` | `VITE_SUPABASE_ANON_KEY` sai | Reset và cập nhật lại key |
 
 ---
 
@@ -801,12 +860,33 @@ Hiện tượng (triệu chứng)
 4. Đối chiếu với `.env.example`  thiếu gì?
 5. Thêm vào Vercel  Redeploy
 
-**Kết quả mong đợi sau fix:** Frontend load đúng   
-**Bài học:** CI pass  production OK. GitHub Secrets và Vercel ENV vars là 2 hệ thống riêng biệt.
+**Kết quả mong đợi sau fix:** Frontend load đúng  ✅  
+**Bài học:** CI pass ≠ production OK. GitHub Secrets và Vercel ENV vars là 2 hệ thống riêng biệt.
 
 ---
 
-## 14. Bảng xử lý lỗi nhanh
+### Incident 8 — "Chat không hoạt động sau khi deploy" *(bonus)*
+
+**Báo cáo nhận được:**
+> "Task list vẫn chạy bình thường. Nhưng chat không gửi được tin nhắn — bấm nút Send không thấy phản hồi gì. Tab khác cũng không nhận được."
+
+**Setup:** Vercel frontend → ENV vars → xóa `VITE_SUPABASE_ANON_KEY` → Redeploy
+
+**Quy trình xử lý:**
+1. Xác định scope: CRUD task còn OK không? (có → backend không phải vấn đề)
+2. F12 → Console → tìm lỗi liên quan WebSocket hoặc Supabase
+3. Lỗi ở layer nào? (Frontend — biến `VITE_SUPABASE_ANON_KEY` bị thiếu → Supabase client không khởi tạo được)
+4. Kiểm tra Vercel frontend → Settings → Environment Variables
+5. Thêm lại `VITE_SUPABASE_ANON_KEY` → Redeploy → test lại với 2 tab
+
+**Kiểm tra sau fix:**
+- F12 → Network → WS tab: phải thấy kết nối WebSocket tới Supabase
+- Gửi tin từ tab 1 → tab 2 nhận ngay, không cần F5
+
+**Kết quả mong đợi sau fix:** Chat hoạt động bình thường  ✅  
+**Bài học:** Chat chỉ dùng Supabase Realtime Broadcast — **không qua backend**. Khi chat lỗi, chỉ cần kiểm tra 2 biến `VITE_SUPABASE_*` và Realtime service. Không cần đụng đến backend hay DB.
+
+---
 
 | Hiện tượng | Layer | Kiểm tra | Fix |
 |-----------|-------|----------|-----|
@@ -817,8 +897,11 @@ Hiện tượng (triệu chứng)
 | `/api/tasks` trả 500 | L3 Backend | Vercel Functions Logs | Kiểm tra Supabase ENV vars |
 | `/api/health` OK, `/api/tasks` fail | L2 External | Supabase Logs | Kiểm tra DB kết nối, bảng tồn tại |
 | Upload fail, CRUD OK | L2 External | Vercel Logs | Kiểm tra `STORAGE_BUCKET`, bucket tồn tại |
-| Realtime không hoạt động | L2 External | Supabase Replication | Bật toggle bảng `tasks` |
-| 404 mọi route frontend | L1 Infra | `vercel.json` | Thêm rewrite `/*  /index.html` |
+| Task realtime không hoạt động | L2 External | Supabase → Database → Replication | Bật toggle bảng `tasks` |
+| **Chat không gửi/nhận được** | **L4 Frontend** | **F12 Console, kiểm tra WebSocket** | **Kiểm tra `VITE_SUPABASE_ANON_KEY` trên Vercel frontend** |
+| **WebSocket lỗi khi chat** | **L2 External** | **Supabase → Project Settings → API** | **Bật Realtime service** |
+| **Gửi tin OK nhưng tab kia không nhận** | **L2 External** | **Supabase Realtime Inspector** | **Xác nhận channel `chat:public` có ≥ 2 subscribers** |
+| 404 mọi route frontend | L1 Infra | `vercel.json` | Thêm rewrite `/* → /index.html` |
 | `${VAR}` hiện literal string | L1 Infra | Vercel ENV value | Dùng giá trị trực tiếp |
 | CI pass, Vercel lỗi | L1 Infra | Vercel ENV vs GitHub Secrets | Khai báo ở cả 2 nơi |
 
@@ -829,7 +912,9 @@ Hiện tượng (triệu chứng)
 **Chức năng:**
 - [ ] Tạo task, xem danh sách
 - [ ] Upload file  Supabase Table Editor chỉ thấy URL, không thấy binary
-- [ ] 2 tab: tab A tạo task  tab B cập nhật không cần F5
+- [ ] 2 tab: tab A tạo task → tab B cập nhật không cần F5
+- [ ] Chat: mở 2 tab → gửi tin từ tab A → tab B nhận ngay, không cần F5
+- [ ] Chat: đóng tab → người dùng biến khỏi danh sách online
 
 **CI/CD:**
 - [ ] `npm run lint && npm test` thành công ở cả 2 project
